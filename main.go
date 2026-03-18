@@ -1,22 +1,49 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
-	"strings"
 
 	"github.com/augustose/infuser-go/internal/config"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
-type menuItem struct {
+// -- styles --
+
+var (
+	titleStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("39")).
+			MarginBottom(1)
+
+	serverStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("243"))
+
+	itemStyle         = lipgloss.NewStyle().PaddingLeft(2)
+	selectedItemStyle = lipgloss.NewStyle().
+				PaddingLeft(2).
+				Foreground(lipgloss.Color("39")).
+				Bold(true)
+	descStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("243"))
+	selectedDescStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("111"))
+
+	footerStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241")).
+			MarginTop(1)
+)
+
+// -- menu items --
+
+type action struct {
 	name string
 	desc string
 }
 
-var actions = []menuItem{
+var actions = []action{
 	{"Reconcile (dry-run)", "Shows what changes would be made without touching Gitea"},
 	{"Reconcile (apply)", "Applies pending changes after interactive confirmation"},
 	{"Reconcile (apply + auto-approve)", "Applies changes without confirmation (CI/CD)"},
@@ -25,149 +52,239 @@ var actions = []menuItem{
 	{"Repository grid report", "Generates CSV+MD with repos, owners, and access info"},
 }
 
-func main() {
-	scanner := bufio.NewScanner(os.Stdin)
+// -- view enum --
 
-	for {
-		clearScreen()
-		printHeader()
+type view int
 
-		servers, err := config.LoadServers()
-		if err != nil {
-			fmt.Printf("Error loading config: %v\n", err)
-			fmt.Print("\nPress Enter to exit...")
-			scanner.Scan()
-			return
-		}
+const (
+	viewServerSelect view = iota
+	viewActionSelect
+)
 
-		serverIdx := 0
-		if len(servers) > 1 {
-			serverIdx = selectServer(scanner, servers)
-			if serverIdx < 0 {
-				return
+// -- model --
+
+type model struct {
+	servers     []config.ServerConfig
+	serverIdx   int
+	actionIdx   int
+	currentView view
+	width       int
+	height      int
+	err         error
+	quitting    bool
+}
+
+func initialModel() model {
+	servers, err := config.LoadServers()
+	if err != nil {
+		return model{err: err}
+	}
+
+	m := model{
+		servers:     servers,
+		currentView: viewServerSelect,
+	}
+
+	// Skip server selection if only one server
+	if len(servers) == 1 {
+		m.serverIdx = 0
+		m.currentView = viewActionSelect
+	}
+
+	return m
+}
+
+func (m model) Init() tea.Cmd {
+	return nil
+}
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c", "q":
+			m.quitting = true
+			return m, tea.Quit
+
+		case "up", "k":
+			switch m.currentView {
+			case viewServerSelect:
+				if m.serverIdx > 0 {
+					m.serverIdx--
+				}
+			case viewActionSelect:
+				if m.actionIdx > 0 {
+					m.actionIdx--
+				}
 			}
-			clearScreen()
-			printHeader()
+
+		case "down", "j":
+			switch m.currentView {
+			case viewServerSelect:
+				if m.serverIdx < len(m.servers)-1 {
+					m.serverIdx++
+				}
+			case viewActionSelect:
+				if m.actionIdx < len(actions)-1 {
+					m.actionIdx++
+				}
+			}
+
+		case "enter":
+			switch m.currentView {
+			case viewServerSelect:
+				m.currentView = viewActionSelect
+				m.actionIdx = 0
+				return m, nil
+			case viewActionSelect:
+				return m, m.runAction()
+			}
+
+		case "esc":
+			if m.currentView == viewActionSelect && len(m.servers) > 1 {
+				m.currentView = viewServerSelect
+				return m, nil
+			}
 		}
-
-		srv := servers[serverIdx]
-
-		fmt.Printf("  Server: %s (%s)\n\n", srv.Name, srv.URL)
-
-		for i, item := range actions {
-			fmt.Printf("  %d. %-35s %s\n", i+1, item.name, item.desc)
-		}
-		fmt.Printf("  0. Exit\n")
-		fmt.Println()
-		fmt.Print("Select an option: ")
-
-		scanner.Scan()
-		choice := strings.TrimSpace(scanner.Text())
-
-		if choice == "0" || choice == "" {
-			clearScreen()
-			fmt.Println("Bye.")
-			return
-		}
-
-		idx, err := strconv.Atoi(choice)
-		if err != nil || idx < 1 || idx > len(actions) {
-			fmt.Println("Invalid option.")
-			waitForEnter(scanner)
-			continue
-		}
-
-		clearScreen()
-		fmt.Printf(">>> %s\n\n", actions[idx-1].name)
-		runAction(idx, srv)
-		waitForEnter(scanner)
 	}
+
+	return m, nil
 }
 
-func runAction(idx int, srv config.ServerConfig) {
-	exe, _ := os.Executable()
-	goCmd := "go"
-
-	// Try to use the built binary path pattern, fall back to go run
-	_ = exe
-
-	switch idx {
-	case 1: // dry-run
-		run(goCmd, "run", "./cmd/reconcile/", "--server", srv.Name)
-	case 2: // apply
-		run(goCmd, "run", "./cmd/reconcile/", "--apply", "--server", srv.Name)
-	case 3: // apply + auto-approve
-		run(goCmd, "run", "./cmd/reconcile/", "--apply", "--auto-approve", "--server", srv.Name)
-	case 4: // export
-		run(goCmd, "run", "./cmd/export/", "--server", srv.Name)
-	case 5: // reset memory
-		resetMemory(srv)
-	case 6: // report
-		run(goCmd, "run", "./cmd/report/", "--server", srv.Name)
+func (m model) View() string {
+	if m.err != nil {
+		return fmt.Sprintf("\n  Error: %v\n\n  Press any key to exit.\n", m.err)
 	}
+	if m.quitting {
+		return ""
+	}
+
+	header := titleStyle.Render("Infuser — Infrastructure as Code for Gitea")
+
+	switch m.currentView {
+	case viewServerSelect:
+		return m.serverSelectView(header)
+	case viewActionSelect:
+		return m.actionSelectView(header)
+	}
+
+	return ""
 }
 
-func resetMemory(srv config.ServerConfig) {
+func (m model) serverSelectView(header string) string {
+	s := "\n" + header + "\n\n"
+	s += "  Select a server:\n\n"
+
+	for i, srv := range m.servers {
+		name := srv.Name
+		url := serverStyle.Render(fmt.Sprintf("(%s)", srv.URL))
+
+		if i == m.serverIdx {
+			s += selectedItemStyle.Render("▸ "+name) + " " + url + "\n"
+		} else {
+			s += itemStyle.Render("  "+name) + " " + url + "\n"
+		}
+	}
+
+	s += footerStyle.Render("\n  ↑/↓ navigate • enter select • q quit")
+	return s
+}
+
+func (m model) actionSelectView(header string) string {
+	srv := m.servers[m.serverIdx]
+
+	s := "\n" + header + "\n"
+	s += serverStyle.Render(fmt.Sprintf("  Server: %s (%s)", srv.Name, srv.URL)) + "\n\n"
+
+	for i, a := range actions {
+		if i == m.actionIdx {
+			s += selectedItemStyle.Render("▸ "+a.name) + "\n"
+			s += "    " + selectedDescStyle.Render(a.desc) + "\n"
+		} else {
+			s += itemStyle.Render("  "+a.name) + "\n"
+			s += "    " + descStyle.Render(a.desc) + "\n"
+		}
+	}
+
+	back := ""
+	if len(m.servers) > 1 {
+		back = " • esc back"
+	}
+	s += footerStyle.Render(fmt.Sprintf("\n  ↑/↓ navigate • enter select%s • q quit", back))
+	return s
+}
+
+// -- command execution --
+
+func (m model) runAction() tea.Cmd {
+	srv := m.servers[m.serverIdx]
+
+	switch m.actionIdx {
+	case 0: // dry-run
+		return tea.ExecProcess(
+			buildCmd("go", "run", "./cmd/reconcile/", "--server", srv.Name),
+			func(err error) tea.Msg { return tea.KeyMsg{} },
+		)
+	case 1: // apply
+		return tea.ExecProcess(
+			buildCmd("go", "run", "./cmd/reconcile/", "--apply", "--server", srv.Name),
+			func(err error) tea.Msg { return tea.KeyMsg{} },
+		)
+	case 2: // apply + auto-approve
+		return tea.ExecProcess(
+			buildCmd("go", "run", "./cmd/reconcile/", "--apply", "--auto-approve", "--server", srv.Name),
+			func(err error) tea.Msg { return tea.KeyMsg{} },
+		)
+	case 3: // export
+		return tea.ExecProcess(
+			buildCmd("go", "run", "./cmd/export/", "--server", srv.Name),
+			func(err error) tea.Msg { return tea.KeyMsg{} },
+		)
+	case 4: // reset memory
+		return m.resetMemory(srv)
+	case 5: // report
+		return tea.ExecProcess(
+			buildCmd("go", "run", "./cmd/report/", "--server", srv.Name),
+			func(err error) tea.Msg { return tea.KeyMsg{} },
+		)
+	}
+	return nil
+}
+
+func (m model) resetMemory(srv config.ServerConfig) tea.Cmd {
+	return tea.ExecProcess(
+		buildResetCmd(srv),
+		func(err error) tea.Msg { return tea.KeyMsg{} },
+	)
+}
+
+func buildCmd(name string, args ...string) *exec.Cmd {
+	cmd := exec.Command(name, args...)
+	return cmd
+}
+
+func buildResetCmd(srv config.ServerConfig) *exec.Cmd {
+	// Remove state file then rebuild
 	if _, err := os.Stat(srv.StateFile); err == nil {
 		os.Remove(srv.StateFile)
 		fmt.Printf("Local memory deleted (%s removed).\n", srv.StateFile)
 	} else {
 		fmt.Println("No local memory file found, nothing to delete.")
 	}
-
 	fmt.Println("Rebuilding memory from current YAML files...")
-	run("go", "run", "./cmd/reconcile/", "--apply", "--auto-approve", "--server", srv.Name)
-	fmt.Println("\nLocal memory has been reset.")
+
+	return buildCmd("go", "run", "./cmd/reconcile/", "--apply", "--auto-approve", "--server", srv.Name)
 }
 
-func selectServer(scanner *bufio.Scanner, servers []config.ServerConfig) int {
-	fmt.Println("  Available servers:\n")
-	for i, s := range servers {
-		fmt.Printf("  %d. %s (%s)\n", i+1, s.Name, s.URL)
-	}
-	fmt.Printf("  0. Exit\n")
-	fmt.Println()
-	fmt.Print("Select server: ")
-
-	scanner.Scan()
-	choice := strings.TrimSpace(scanner.Text())
-
-	if choice == "0" || choice == "" {
-		return -1
-	}
-
-	idx, err := strconv.Atoi(choice)
-	if err != nil || idx < 1 || idx > len(servers) {
-		return 0 // default to first
-	}
-	return idx - 1
-}
-
-func run(name string, args ...string) {
-	cmd := exec.Command(name, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	if err := cmd.Run(); err != nil {
+func main() {
+	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
 	}
-}
-
-func clearScreen() {
-	cmd := exec.Command("clear")
-	cmd.Stdout = os.Stdout
-	cmd.Run()
-}
-
-func printHeader() {
-	fmt.Println("========================================")
-	fmt.Println("  Infuser")
-	fmt.Println("  Infrastructure as Code for Gitea")
-	fmt.Println("========================================")
-	fmt.Println()
-}
-
-func waitForEnter(scanner *bufio.Scanner) {
-	fmt.Print("\nPress Enter to return to menu...")
-	scanner.Scan()
 }
