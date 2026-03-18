@@ -67,12 +67,13 @@ const (
 // -- model --
 
 type model struct {
-	servers     []config.ServerConfig
-	serverIdx   int
-	actionIdx   int
-	currentView view
-	err         error
-	quitting    bool
+	servers      []config.ServerConfig
+	serverIdx    int
+	actionIdx    int
+	currentView  view
+	err          error
+	quitting     bool
+	returningCmd bool
 }
 
 func initialModel() model {
@@ -102,9 +103,15 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case cmdFinishedMsg:
+		m.returningCmd = true
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.returningCmd {
+			m.returningCmd = false
+			return m, nil
+		}
+
 		if m.err != nil {
 			m.quitting = true
 			return m, tea.Quit
