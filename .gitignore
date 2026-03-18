@@ -1,0 +1,15 @@
+# Binaries
+infuser-go
+*.exe
+
+# Configuration (secrets)
+.env
+servers.yaml
+
+# Runtime data
+infuser-config/
+.infuser_state*.json
+output/
+
+# OS
+.DS_Store

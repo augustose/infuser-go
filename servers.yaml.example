@@ -1,0 +1,21 @@
+# Multi-server configuration for Infuser
+# Token values are read from environment variables (never stored in this file)
+
+servers:
+  # Production Gitea instance
+  - name: production
+    url: https://gitea.example.com
+    read_token_env: PROD_GITEA_READ_TOKEN
+    write_token_env: PROD_GITEA_WRITE_TOKEN
+    allow_writes: false
+    config_dir: infuser-config/production
+    state_file: .infuser_state_production.json
+
+  # Staging Gitea instance
+  - name: staging
+    url: https://gitea-staging.example.com
+    read_token_env: STAGING_GITEA_READ_TOKEN
+    write_token_env: STAGING_GITEA_WRITE_TOKEN
+    allow_writes: true
+    config_dir: infuser-config/staging
+    state_file: .infuser_state_staging.json
