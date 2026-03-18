@@ -2,10 +2,12 @@ package api
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"strings"
 
@@ -141,7 +143,7 @@ func (c *GiteaClient) CreateUser(username string, spec map[string]any) error {
 		"username":             username,
 		"email":                spec["email"],
 		"full_name":            mapGetString(spec, "full_name", ""),
-		"password":             "Password123!",
+		"password":             generateTempPassword(),
 		"must_change_password": true,
 		"send_notify":          true,
 	}
@@ -555,4 +557,14 @@ func mapGetBool(m map[string]any, key string, fallback bool) bool {
 		}
 	}
 	return fallback
+}
+
+func generateTempPassword() string {
+	const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%"
+	b := make([]byte, 24)
+	for i := range b {
+		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
+		b[i] = chars[n.Int64()]
+	}
+	return string(b)
 }
