@@ -163,6 +163,10 @@ infuser-config/<server-name>/
             └── <repo>.yaml
 ```
 
+## Acknowledgments
+
+Inspired by [Goliac](https://github.com/goliac-project/goliac), a GitOps identity and access management tool for GitHub. Infuser brings a similar declarative approach to Gitea/Forgejo.
+
 ## License
 
 MIT
