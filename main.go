@@ -160,7 +160,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func execProcess(cmd *exec.Cmd) tea.Cmd {
+func execWithPause(args ...string) tea.Cmd {
+	script := strings.Join(args, " ")
+	script += `; echo ""; read -p "Press Enter to return to menu..." _`
+	cmd := exec.Command("sh", "-c", script)
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		return cmdFinishedMsg{err: err}
 	})
@@ -238,21 +241,20 @@ func (m model) runAction() tea.Cmd {
 
 	switch m.actionIdx {
 	case 0: // dry-run
-		return execProcess(exec.Command("go", "run", "./cmd/reconcile/", "--server", srv.Name))
+		return execWithPause("go", "run", "./cmd/reconcile/", "--server", srv.Name)
 	case 1: // apply
-		return execProcess(exec.Command("go", "run", "./cmd/reconcile/", "--apply", "--server", srv.Name))
+		return execWithPause("go", "run", "./cmd/reconcile/", "--apply", "--server", srv.Name)
 	case 2: // apply + auto-approve
-		return execProcess(exec.Command("go", "run", "./cmd/reconcile/", "--apply", "--auto-approve", "--server", srv.Name))
+		return execWithPause("go", "run", "./cmd/reconcile/", "--apply", "--auto-approve", "--server", srv.Name)
 	case 3: // export
-		return execProcess(exec.Command("go", "run", "./cmd/export/", "--server", srv.Name))
+		return execWithPause("go", "run", "./cmd/export/", "--server", srv.Name)
 	case 4: // reset memory
-		script := fmt.Sprintf(
-			`rm -f %q && echo "Local memory deleted (%s removed)." && echo "Rebuilding memory from current YAML files..." && go run ./cmd/reconcile/ --apply --auto-approve --server %s`,
-			srv.StateFile, srv.StateFile, srv.Name,
+		return execWithPause(
+			fmt.Sprintf(`rm -f %q && echo "Local memory deleted (%s removed)." && echo "Rebuilding memory from current YAML files..." &&`, srv.StateFile, srv.StateFile),
+			"go", "run", "./cmd/reconcile/", "--apply", "--auto-approve", "--server", srv.Name,
 		)
-		return execProcess(exec.Command("sh", "-c", script))
 	case 5: // report
-		return execProcess(exec.Command("go", "run", "./cmd/report/", "--server", srv.Name))
+		return execWithPause("go", "run", "./cmd/report/", "--server", srv.Name)
 	}
 	return nil
 }
