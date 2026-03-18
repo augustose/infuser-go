@@ -4,11 +4,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/augustose/infuser-go/internal/config"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+type cmdFinishedMsg struct{ err error }
 
 // -- styles --
 
@@ -68,8 +71,6 @@ type model struct {
 	serverIdx   int
 	actionIdx   int
 	currentView view
-	width       int
-	height      int
 	err         error
 	quitting    bool
 }
@@ -100,12 +101,15 @@ func (m model) Init() tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
+	case cmdFinishedMsg:
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.err != nil {
+			m.quitting = true
+			return m, tea.Quit
+		}
+
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.quitting = true
@@ -156,9 +160,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func execProcess(cmd *exec.Cmd) tea.Cmd {
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return cmdFinishedMsg{err: err}
+	})
+}
+
 func (m model) View() string {
 	if m.err != nil {
-		return fmt.Sprintf("\n  Error: %v\n\n  Press any key to exit.\n", m.err)
+		return fmt.Sprintf("\n  Error: %v\n\n  Press any key to exit.\n\n", m.err)
 	}
 	if m.quitting {
 		return ""
@@ -177,37 +187,39 @@ func (m model) View() string {
 }
 
 func (m model) serverSelectView(header string) string {
-	s := "\n" + header + "\n\n"
-	s += "  Select a server:\n\n"
+	var b strings.Builder
+	b.WriteString("\n" + header + "\n\n")
+	b.WriteString("  Select a server:\n\n")
 
 	for i, srv := range m.servers {
 		name := srv.Name
 		url := serverStyle.Render(fmt.Sprintf("(%s)", srv.URL))
 
 		if i == m.serverIdx {
-			s += selectedItemStyle.Render("▸ "+name) + " " + url + "\n"
+			b.WriteString(selectedItemStyle.Render("▸ "+name) + " " + url + "\n")
 		} else {
-			s += itemStyle.Render("  "+name) + " " + url + "\n"
+			b.WriteString(itemStyle.Render("  "+name) + " " + url + "\n")
 		}
 	}
 
-	s += footerStyle.Render("\n  ↑/↓ navigate • enter select • q quit")
-	return s
+	b.WriteString(footerStyle.Render("\n  ↑/↓ navigate • enter select • q quit"))
+	return b.String()
 }
 
 func (m model) actionSelectView(header string) string {
 	srv := m.servers[m.serverIdx]
 
-	s := "\n" + header + "\n"
-	s += serverStyle.Render(fmt.Sprintf("  Server: %s (%s)", srv.Name, srv.URL)) + "\n\n"
+	var b strings.Builder
+	b.WriteString("\n" + header + "\n")
+	b.WriteString(serverStyle.Render(fmt.Sprintf("  Server: %s (%s)", srv.Name, srv.URL)) + "\n\n")
 
 	for i, a := range actions {
 		if i == m.actionIdx {
-			s += selectedItemStyle.Render("▸ "+a.name) + "\n"
-			s += "    " + selectedDescStyle.Render(a.desc) + "\n"
+			b.WriteString(selectedItemStyle.Render("▸ "+a.name) + "\n")
+			b.WriteString("    " + selectedDescStyle.Render(a.desc) + "\n")
 		} else {
-			s += itemStyle.Render("  "+a.name) + "\n"
-			s += "    " + descStyle.Render(a.desc) + "\n"
+			b.WriteString(itemStyle.Render("  "+a.name) + "\n")
+			b.WriteString("    " + descStyle.Render(a.desc) + "\n")
 		}
 	}
 
@@ -215,8 +227,8 @@ func (m model) actionSelectView(header string) string {
 	if len(m.servers) > 1 {
 		back = " • esc back"
 	}
-	s += footerStyle.Render(fmt.Sprintf("\n  ↑/↓ navigate • enter select%s • q quit", back))
-	return s
+	b.WriteString(footerStyle.Render(fmt.Sprintf("\n  ↑/↓ navigate • enter select%s • q quit", back)))
+	return b.String()
 }
 
 // -- command execution --
@@ -226,59 +238,23 @@ func (m model) runAction() tea.Cmd {
 
 	switch m.actionIdx {
 	case 0: // dry-run
-		return tea.ExecProcess(
-			buildCmd("go", "run", "./cmd/reconcile/", "--server", srv.Name),
-			func(err error) tea.Msg { return tea.KeyMsg{} },
-		)
+		return execProcess(exec.Command("go", "run", "./cmd/reconcile/", "--server", srv.Name))
 	case 1: // apply
-		return tea.ExecProcess(
-			buildCmd("go", "run", "./cmd/reconcile/", "--apply", "--server", srv.Name),
-			func(err error) tea.Msg { return tea.KeyMsg{} },
-		)
+		return execProcess(exec.Command("go", "run", "./cmd/reconcile/", "--apply", "--server", srv.Name))
 	case 2: // apply + auto-approve
-		return tea.ExecProcess(
-			buildCmd("go", "run", "./cmd/reconcile/", "--apply", "--auto-approve", "--server", srv.Name),
-			func(err error) tea.Msg { return tea.KeyMsg{} },
-		)
+		return execProcess(exec.Command("go", "run", "./cmd/reconcile/", "--apply", "--auto-approve", "--server", srv.Name))
 	case 3: // export
-		return tea.ExecProcess(
-			buildCmd("go", "run", "./cmd/export/", "--server", srv.Name),
-			func(err error) tea.Msg { return tea.KeyMsg{} },
-		)
+		return execProcess(exec.Command("go", "run", "./cmd/export/", "--server", srv.Name))
 	case 4: // reset memory
-		return m.resetMemory(srv)
-	case 5: // report
-		return tea.ExecProcess(
-			buildCmd("go", "run", "./cmd/report/", "--server", srv.Name),
-			func(err error) tea.Msg { return tea.KeyMsg{} },
+		script := fmt.Sprintf(
+			`rm -f %q && echo "Local memory deleted (%s removed)." && echo "Rebuilding memory from current YAML files..." && go run ./cmd/reconcile/ --apply --auto-approve --server %s`,
+			srv.StateFile, srv.StateFile, srv.Name,
 		)
+		return execProcess(exec.Command("sh", "-c", script))
+	case 5: // report
+		return execProcess(exec.Command("go", "run", "./cmd/report/", "--server", srv.Name))
 	}
 	return nil
-}
-
-func (m model) resetMemory(srv config.ServerConfig) tea.Cmd {
-	return tea.ExecProcess(
-		buildResetCmd(srv),
-		func(err error) tea.Msg { return tea.KeyMsg{} },
-	)
-}
-
-func buildCmd(name string, args ...string) *exec.Cmd {
-	cmd := exec.Command(name, args...)
-	return cmd
-}
-
-func buildResetCmd(srv config.ServerConfig) *exec.Cmd {
-	// Remove state file then rebuild
-	if _, err := os.Stat(srv.StateFile); err == nil {
-		os.Remove(srv.StateFile)
-		fmt.Printf("Local memory deleted (%s removed).\n", srv.StateFile)
-	} else {
-		fmt.Println("No local memory file found, nothing to delete.")
-	}
-	fmt.Println("Rebuilding memory from current YAML files...")
-
-	return buildCmd("go", "run", "./cmd/reconcile/", "--apply", "--auto-approve", "--server", srv.Name)
 }
 
 func main() {
