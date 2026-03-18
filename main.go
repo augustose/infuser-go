@@ -48,18 +48,19 @@ var (
 // -- menu items --
 
 type action struct {
-	name       string
-	desc       string
-	needsState bool
+	name        string
+	desc        string
+	needsState  bool
+	needsConfig bool
 }
 
 var actions = []action{
-	{"Reconcile (dry-run)", "Shows what changes would be made without touching Gitea", true},
-	{"Reconcile (apply)", "Applies pending changes after interactive confirmation", false},
-	{"Reconcile (apply + auto-approve)", "Applies changes without confirmation (CI/CD)", false},
-	{"Export Gitea state", "Downloads users, orgs, repos into YAML files", false},
-	{"Reset local memory", "Deletes state file and rebuilds from current YAMLs", true},
-	{"Repository grid report", "Generates CSV+MD with repos, owners, and access info", false},
+	{"Reconcile (dry-run)", "Shows what changes would be made without touching Gitea", true, false},
+	{"Reconcile (apply)", "Applies pending changes after interactive confirmation", false, false},
+	{"Reconcile (apply + auto-approve)", "Applies changes without confirmation (CI/CD)", false, false},
+	{"Export Gitea state", "Downloads users, orgs, repos into YAML files", false, false},
+	{"Reset local memory", "Deletes state file and rebuilds from current YAMLs", true, false},
+	{"Repository grid report", "Generates CSV+MD with repos, owners, and access info", false, true},
 }
 
 // -- view enum --
@@ -82,6 +83,7 @@ type model struct {
 	quitting     bool
 	returningCmd bool
 	hasState     bool
+	hasConfig    bool
 }
 
 func stateFileExists(srv config.ServerConfig) bool {
@@ -89,9 +91,18 @@ func stateFileExists(srv config.ServerConfig) bool {
 	return err == nil
 }
 
+func configDirExists(srv config.ServerConfig) bool {
+	entries, err := os.ReadDir(srv.ConfigDir)
+	return err == nil && len(entries) > 0
+}
+
+func (m model) actionDisabled(a action) bool {
+	return (a.needsState && !m.hasState) || (a.needsConfig && !m.hasConfig)
+}
+
 func (m model) firstEnabledAction() int {
 	for i, a := range actions {
-		if !a.needsState || m.hasState {
+		if !m.actionDisabled(a) {
 			return i
 		}
 	}
@@ -114,6 +125,7 @@ func initialModel() model {
 		m.serverIdx = 0
 		m.currentView = viewActionSelect
 		m.hasState = stateFileExists(servers[0])
+		m.hasConfig = configDirExists(servers[0])
 		m.actionIdx = m.firstEnabledAction()
 	}
 
@@ -129,6 +141,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cmdFinishedMsg:
 		m.returningCmd = true
 		m.hasState = stateFileExists(m.servers[m.serverIdx])
+		m.hasConfig = configDirExists(m.servers[m.serverIdx])
 		return m, nil
 
 	case tea.KeyMsg:
@@ -155,7 +168,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case viewActionSelect:
 				for i := m.actionIdx - 1; i >= 0; i-- {
-					if !actions[i].needsState || m.hasState {
+					if !m.actionDisabled(actions[i]) {
 						m.actionIdx = i
 						break
 					}
@@ -170,7 +183,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case viewActionSelect:
 				for i := m.actionIdx + 1; i < len(actions); i++ {
-					if !actions[i].needsState || m.hasState {
+					if !m.actionDisabled(actions[i]) {
 						m.actionIdx = i
 						break
 					}
@@ -183,9 +196,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.currentView = viewActionSelect
 				m.actionIdx = m.firstEnabledAction()
 				m.hasState = stateFileExists(m.servers[m.serverIdx])
+				m.hasConfig = configDirExists(m.servers[m.serverIdx])
 				return m, nil
 			case viewActionSelect:
-				if actions[m.actionIdx].needsState && !m.hasState {
+				if m.actionDisabled(actions[m.actionIdx]) {
 					return m, nil
 				}
 				return m, m.runAction()
@@ -259,10 +273,13 @@ func (m model) actionSelectView(header string) string {
 	b.WriteString(serverStyle.Render(fmt.Sprintf("  Server: %s (%s)", srv.Name, srv.URL)) + "\n\n")
 
 	for i, a := range actions {
-		disabled := a.needsState && !m.hasState
-		if disabled {
+		if m.actionDisabled(a) {
+			reason := "no state file"
+			if a.needsConfig && !m.hasConfig {
+				reason = "export first"
+			}
 			b.WriteString(disabledStyle.Render("  "+a.name) + "\n")
-			b.WriteString("    " + disabledDescStyle.Render(a.desc+" (no state file)") + "\n")
+			b.WriteString("    " + disabledDescStyle.Render(a.desc+" ("+reason+")") + "\n")
 		} else if i == m.actionIdx {
 			b.WriteString(selectedItemStyle.Render("▸ "+a.name) + "\n")
 			b.WriteString("    " + selectedDescStyle.Render(a.desc) + "\n")
