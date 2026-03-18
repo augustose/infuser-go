@@ -49,15 +49,15 @@ func RunEngine(client *api.GiteaClient, opts Options, configDir, stateFile strin
 	}
 
 	if len(mem.State.Users) == 0 && len(mem.State.Organizations) == 0 {
-		fmt.Println("  Local memory is empty. Assuming state was just exported from Gitea.")
-		fmt.Println("  Building base memory from current YAML files...")
+		fmt.Println("  Local memory is empty.")
 		if !opts.DryRun {
+			fmt.Println("  Initializing state file from current YAML files...")
 			if err := mem.Save(desired); err != nil {
 				return err
 			}
-			fmt.Println("  Initial memory persisted successfully.")
+			fmt.Println("  State file initialized. Future runs will compute diffs against this baseline.")
 		} else {
-			fmt.Println("  (Skipped saving in Dry Run mode).")
+			fmt.Println("  Run with --apply to initialize the state file before reconciling.")
 		}
 		return nil
 	}
