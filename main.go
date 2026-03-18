@@ -34,6 +34,12 @@ var (
 	selectedDescStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("111"))
 
+	disabledStyle = lipgloss.NewStyle().
+			PaddingLeft(2).
+			Foreground(lipgloss.Color("238"))
+	disabledDescStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("238"))
+
 	footerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
 			MarginTop(1)
@@ -42,17 +48,18 @@ var (
 // -- menu items --
 
 type action struct {
-	name string
-	desc string
+	name       string
+	desc       string
+	needsState bool
 }
 
 var actions = []action{
-	{"Reconcile (dry-run)", "Shows what changes would be made without touching Gitea"},
-	{"Reconcile (apply)", "Applies pending changes after interactive confirmation"},
-	{"Reconcile (apply + auto-approve)", "Applies changes without confirmation (CI/CD)"},
-	{"Export Gitea state", "Downloads users, orgs, repos into YAML files"},
-	{"Reset local memory", "Deletes state file and rebuilds from current YAMLs"},
-	{"Repository grid report", "Generates CSV+MD with repos, owners, and access info"},
+	{"Reconcile (dry-run)", "Shows what changes would be made without touching Gitea", true},
+	{"Reconcile (apply)", "Applies pending changes after interactive confirmation", false},
+	{"Reconcile (apply + auto-approve)", "Applies changes without confirmation (CI/CD)", false},
+	{"Export Gitea state", "Downloads users, orgs, repos into YAML files", false},
+	{"Reset local memory", "Deletes state file and rebuilds from current YAMLs", true},
+	{"Repository grid report", "Generates CSV+MD with repos, owners, and access info", false},
 }
 
 // -- view enum --
@@ -74,6 +81,21 @@ type model struct {
 	err          error
 	quitting     bool
 	returningCmd bool
+	hasState     bool
+}
+
+func stateFileExists(srv config.ServerConfig) bool {
+	_, err := os.Stat(srv.StateFile)
+	return err == nil
+}
+
+func (m model) firstEnabledAction() int {
+	for i, a := range actions {
+		if !a.needsState || m.hasState {
+			return i
+		}
+	}
+	return 0
 }
 
 func initialModel() model {
@@ -91,6 +113,8 @@ func initialModel() model {
 	if len(servers) == 1 {
 		m.serverIdx = 0
 		m.currentView = viewActionSelect
+		m.hasState = stateFileExists(servers[0])
+		m.actionIdx = m.firstEnabledAction()
 	}
 
 	return m
@@ -104,6 +128,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case cmdFinishedMsg:
 		m.returningCmd = true
+		m.hasState = stateFileExists(m.servers[m.serverIdx])
 		return m, nil
 
 	case tea.KeyMsg:
@@ -129,8 +154,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.serverIdx--
 				}
 			case viewActionSelect:
-				if m.actionIdx > 0 {
-					m.actionIdx--
+				for i := m.actionIdx - 1; i >= 0; i-- {
+					if !actions[i].needsState || m.hasState {
+						m.actionIdx = i
+						break
+					}
 				}
 			}
 
@@ -141,8 +169,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.serverIdx++
 				}
 			case viewActionSelect:
-				if m.actionIdx < len(actions)-1 {
-					m.actionIdx++
+				for i := m.actionIdx + 1; i < len(actions); i++ {
+					if !actions[i].needsState || m.hasState {
+						m.actionIdx = i
+						break
+					}
 				}
 			}
 
@@ -150,9 +181,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch m.currentView {
 			case viewServerSelect:
 				m.currentView = viewActionSelect
-				m.actionIdx = 0
+				m.actionIdx = m.firstEnabledAction()
+				m.hasState = stateFileExists(m.servers[m.serverIdx])
 				return m, nil
 			case viewActionSelect:
+				if actions[m.actionIdx].needsState && !m.hasState {
+					return m, nil
+				}
 				return m, m.runAction()
 			}
 
@@ -224,7 +259,11 @@ func (m model) actionSelectView(header string) string {
 	b.WriteString(serverStyle.Render(fmt.Sprintf("  Server: %s (%s)", srv.Name, srv.URL)) + "\n\n")
 
 	for i, a := range actions {
-		if i == m.actionIdx {
+		disabled := a.needsState && !m.hasState
+		if disabled {
+			b.WriteString(disabledStyle.Render("  "+a.name) + "\n")
+			b.WriteString("    " + disabledDescStyle.Render(a.desc+" (no state file)") + "\n")
+		} else if i == m.actionIdx {
 			b.WriteString(selectedItemStyle.Render("▸ "+a.name) + "\n")
 			b.WriteString("    " + selectedDescStyle.Render(a.desc) + "\n")
 		} else {
