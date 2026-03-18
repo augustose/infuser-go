@@ -13,13 +13,25 @@ import (
 
 type cmdFinishedMsg struct{ err error }
 
+// -- banner --
+
+const banner = `  ██╗███╗   ██╗███████╗██╗   ██╗███████╗███████╗██████╗
+  ██║████╗  ██║██╔════╝██║   ██║██╔════╝██╔════╝██╔══██╗
+  ██║██╔██╗ ██║█████╗  ██║   ██║███████╗█████╗  ██████╔╝
+  ██║██║╚██╗██║██╔══╝  ██║   ██║╚════██║██╔══╝  ██╔══██╗
+  ██║██║ ╚████║██║     ╚██████╔╝███████║███████╗██║  ██║
+  ╚═╝╚═╝  ╚═══╝╚═╝      ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝`
+
 // -- styles --
 
 var (
-	titleStyle = lipgloss.NewStyle().
-			Bold(true).
+	bannerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("39")).
-			MarginBottom(1)
+			Bold(true)
+
+	subtitleStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("243")).
+			PaddingLeft(2)
 
 	serverStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("243"))
@@ -40,9 +52,24 @@ var (
 	disabledDescStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("238"))
 
-	footerStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")).
-			MarginTop(1)
+	statusBarStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252")).
+			Background(lipgloss.Color("236")).
+			PaddingLeft(1).
+			PaddingRight(1)
+
+	statusKeyStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("39")).
+			Background(lipgloss.Color("236")).
+			Bold(true)
+
+	statusOkStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("42")).
+			Background(lipgloss.Color("236"))
+
+	statusNoStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("196")).
+			Background(lipgloss.Color("236"))
 )
 
 // -- menu items --
@@ -79,6 +106,8 @@ type model struct {
 	serverIdx    int
 	actionIdx    int
 	currentView  view
+	width        int
+	height       int
 	err          error
 	quitting     bool
 	returningCmd bool
@@ -138,6 +167,11 @@ func (m model) Init() tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, nil
+
 	case cmdFinishedMsg:
 		m.returningCmd = true
 		m.hasState = stateFileExists(m.servers[m.serverIdx])
@@ -233,6 +267,8 @@ func execWithPause(args ...string) tea.Cmd {
 	})
 }
 
+// -- views --
+
 func (m model) View() string {
 	if m.err != nil {
 		return fmt.Sprintf("\n  Error: %v\n\n  Press any key to exit.\n\n", m.err)
@@ -241,22 +277,34 @@ func (m model) View() string {
 		return ""
 	}
 
-	header := titleStyle.Render("Infuser — Infrastructure as Code for Gitea")
+	header := bannerStyle.Render(banner) + "\n" + subtitleStyle.Render("Infrastructure as Code for Gitea")
 
+	var content string
 	switch m.currentView {
 	case viewServerSelect:
-		return m.serverSelectView(header)
+		content = m.serverSelectView()
 	case viewActionSelect:
-		return m.actionSelectView(header)
+		content = m.actionSelectView()
 	}
 
-	return ""
+	statusBar := m.renderStatusBar()
+
+	// Calculate padding to push status bar to bottom
+	contentLines := strings.Count(header, "\n") + strings.Count(content, "\n") + 2
+	padding := 0
+	if m.height > 0 {
+		padding = m.height - contentLines - 1
+	}
+	if padding < 1 {
+		padding = 1
+	}
+
+	return header + "\n" + content + strings.Repeat("\n", padding) + statusBar
 }
 
-func (m model) serverSelectView(header string) string {
+func (m model) serverSelectView() string {
 	var b strings.Builder
-	b.WriteString("\n" + header + "\n\n")
-	b.WriteString("  Select a server:\n\n")
+	b.WriteString("\n  Select a server:\n\n")
 
 	for i, srv := range m.servers {
 		name := srv.Name
@@ -269,16 +317,14 @@ func (m model) serverSelectView(header string) string {
 		}
 	}
 
-	b.WriteString(footerStyle.Render("\n  ↑/↓ navigate • enter select • esc quit"))
 	return b.String()
 }
 
-func (m model) actionSelectView(header string) string {
+func (m model) actionSelectView() string {
 	srv := m.servers[m.serverIdx]
 
 	var b strings.Builder
-	b.WriteString("\n" + header + "\n")
-	b.WriteString(serverStyle.Render(fmt.Sprintf("  Server: %s (%s)", srv.Name, srv.URL)) + "\n\n")
+	b.WriteString("\n" + serverStyle.Render(fmt.Sprintf("  Server: %s (%s)", srv.Name, srv.URL)) + "\n\n")
 
 	for i, a := range actions {
 		if m.actionDisabled(a) {
@@ -297,11 +343,68 @@ func (m model) actionSelectView(header string) string {
 		}
 	}
 
+	return b.String()
+}
+
+func (m model) renderStatusBar() string {
+	width := m.width
+	if width == 0 {
+		width = 80
+	}
+
+	var left string
+	switch m.currentView {
+	case viewServerSelect:
+		left = fmt.Sprintf(" %s servers available",
+			statusKeyStyle.Render(fmt.Sprintf("%d", len(m.servers))))
+	case viewActionSelect:
+		srv := m.servers[m.serverIdx]
+
+		stateIndicator := statusOkStyle.Render("✓")
+		if !m.hasState {
+			stateIndicator = statusNoStyle.Render("✗")
+		}
+		configIndicator := statusOkStyle.Render("✓")
+		if !m.hasConfig {
+			configIndicator = statusNoStyle.Render("✗")
+		}
+
+		left = fmt.Sprintf(" %s (%s) │ State: %s │ Config: %s",
+			statusKeyStyle.Render(srv.Name), srv.URL,
+			stateIndicator, configIndicator)
+	}
+
 	escLabel := "esc quit"
-	if len(m.servers) > 1 {
+	if m.currentView == viewActionSelect && len(m.servers) > 1 {
 		escLabel = "esc back"
 	}
-	b.WriteString(footerStyle.Render(fmt.Sprintf("\n  ↑/↓ navigate • enter select • %s", escLabel)))
+	right := fmt.Sprintf("↑/↓ navigate • enter select • %s ", escLabel)
+
+	// Calculate visible lengths (without ANSI codes)
+	leftPlain := stripAnsi(left)
+	rightPlain := right
+	gap := max(width-len(leftPlain)-len(rightPlain), 1)
+
+	bar := left + strings.Repeat(" ", gap) + right
+	return statusBarStyle.Render(bar)
+}
+
+func stripAnsi(s string) string {
+	var b strings.Builder
+	inEsc := false
+	for _, r := range s {
+		if r == '\x1b' {
+			inEsc = true
+			continue
+		}
+		if inEsc {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				inEsc = false
+			}
+			continue
+		}
+		b.WriteRune(r)
+	}
 	return b.String()
 }
 
