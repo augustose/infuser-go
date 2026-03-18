@@ -156,7 +156,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.String() {
-		case "ctrl+c", "q":
+		case "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
 
@@ -206,9 +206,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "esc":
-			if m.currentView == viewActionSelect && len(m.servers) > 1 {
-				m.currentView = viewServerSelect
-				return m, nil
+			switch m.currentView {
+			case viewActionSelect:
+				if len(m.servers) > 1 {
+					m.currentView = viewServerSelect
+					return m, nil
+				}
+				m.quitting = true
+				return m, tea.Quit
+			case viewServerSelect:
+				m.quitting = true
+				return m, tea.Quit
 			}
 		}
 	}
@@ -261,7 +269,7 @@ func (m model) serverSelectView(header string) string {
 		}
 	}
 
-	b.WriteString(footerStyle.Render("\n  ↑/↓ navigate • enter select • q quit"))
+	b.WriteString(footerStyle.Render("\n  ↑/↓ navigate • enter select • esc quit"))
 	return b.String()
 }
 
@@ -289,11 +297,11 @@ func (m model) actionSelectView(header string) string {
 		}
 	}
 
-	back := ""
+	escLabel := "esc quit"
 	if len(m.servers) > 1 {
-		back = " • esc back"
+		escLabel = "esc back"
 	}
-	b.WriteString(footerStyle.Render(fmt.Sprintf("\n  ↑/↓ navigate • enter select%s • q quit", back)))
+	b.WriteString(footerStyle.Render(fmt.Sprintf("\n  ↑/↓ navigate • enter select • %s", escLabel)))
 	return b.String()
 }
 
