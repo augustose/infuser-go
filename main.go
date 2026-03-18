@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/augustose/infuser-go/internal/config"
 	tea "github.com/charmbracelet/bubbletea"
@@ -12,6 +13,7 @@ import (
 )
 
 type cmdFinishedMsg struct{ err error }
+type blinkMsg struct{}
 
 // -- banner --
 
@@ -70,6 +72,15 @@ var (
 	statusNoStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("196")).
 			Background(lipgloss.Color("236"))
+
+	hintStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("220")).
+			Background(lipgloss.Color("236")).
+			Bold(true)
+
+	hintDimStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("58")).
+			Background(lipgloss.Color("236"))
 )
 
 // -- menu items --
@@ -113,6 +124,7 @@ type model struct {
 	returningCmd bool
 	hasState     bool
 	hasConfig    bool
+	blinkOn      bool
 }
 
 func stateFileExists(srv config.ServerConfig) bool {
@@ -161,8 +173,14 @@ func initialModel() model {
 	return m
 }
 
+func blinkTick() tea.Cmd {
+	return tea.Tick(600*time.Millisecond, func(t time.Time) tea.Msg {
+		return blinkMsg{}
+	})
+}
+
 func (m model) Init() tea.Cmd {
-	return nil
+	return blinkTick()
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -171,6 +189,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
+
+	case blinkMsg:
+		m.blinkOn = !m.blinkOn
+		return m, blinkTick()
 
 	case cmdFinishedMsg:
 		m.returningCmd = true
@@ -291,9 +313,13 @@ func (m model) View() string {
 
 	// Calculate padding to push status bar to bottom
 	contentLines := strings.Count(header, "\n") + strings.Count(content, "\n") + 2
+	statusBarLines := 1
+	if m.nextStepHint() != "" {
+		statusBarLines = 2
+	}
 	padding := 0
 	if m.height > 0 {
-		padding = m.height - contentLines - 1
+		padding = m.height - contentLines - statusBarLines
 	}
 	if padding < 1 {
 		padding = 1
@@ -346,10 +372,38 @@ func (m model) actionSelectView() string {
 	return b.String()
 }
 
+func (m model) nextStepHint() string {
+	if m.currentView != viewActionSelect {
+		return ""
+	}
+	if !m.hasConfig {
+		return "▶ Export Gitea state to get started"
+	}
+	if !m.hasState {
+		return "▶ Run Reconcile (apply) to initialize state"
+	}
+	return ""
+}
+
 func (m model) renderStatusBar() string {
 	width := m.width
 	if width == 0 {
 		width = 80
+	}
+
+	var result string
+
+	// Hint line above status bar
+	if hint := m.nextStepHint(); hint != "" {
+		style := hintDimStyle
+		if m.blinkOn {
+			style = hintStyle
+		}
+		styledHint := style.Render(hint)
+		hintPlain := stripAnsi(styledHint)
+		pad := max((width-len(hintPlain))/2, 0)
+		hintLine := strings.Repeat(" ", pad) + styledHint + strings.Repeat(" ", max(width-pad-len(hintPlain), 0))
+		result += statusBarStyle.Render(hintLine) + "\n"
 	}
 
 	var left string
@@ -380,13 +434,13 @@ func (m model) renderStatusBar() string {
 	}
 	right := fmt.Sprintf("↑/↓ navigate • enter select • %s ", escLabel)
 
-	// Calculate visible lengths (without ANSI codes)
 	leftPlain := stripAnsi(left)
 	rightPlain := right
 	gap := max(width-len(leftPlain)-len(rightPlain), 1)
 
 	bar := left + strings.Repeat(" ", gap) + right
-	return statusBarStyle.Render(bar)
+	result += statusBarStyle.Render(bar)
+	return result
 }
 
 func stripAnsi(s string) string {
