@@ -28,7 +28,7 @@ func main() {
 			fmt.Printf("\n>>> Server: %s (%s)\n\n", srv.Name, srv.URL)
 		}
 
-		if err := report.GenerateRepoGrid(srv.ConfigDir, srv.URL); err != nil {
+		if err := report.GenerateRepoGrid(srv.ConfigDir, srv.URL, srv.Name); err != nil {
 			fmt.Fprintf(os.Stderr, "Error generating report for %s: %v\n", srv.Name, err)
 		}
 	}

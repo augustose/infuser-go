@@ -133,7 +133,7 @@ func buildRows(configDir, serverURL string) ([]Row, error) {
 }
 
 // GenerateRepoGrid creates CSV and Markdown reports of the repository access grid.
-func GenerateRepoGrid(configDir, serverURL string) error {
+func GenerateRepoGrid(configDir, serverURL, serverName string) error {
 	rows, err := buildRows(configDir, serverURL)
 	if err != nil {
 		return err
@@ -183,9 +183,16 @@ func GenerateRepoGrid(configDir, serverURL string) error {
 		fmt.Fprintf(mdFile, "| %s | %s | %s | %s | %s | %s |\n", r.Repository, r.URL, desc, r.Organization, r.Owner, usersStr)
 	}
 
+	// Write HTML
+	htmlPath, err := writeHTML(rows, serverName, reportDir, timestamp)
+	if err != nil {
+		return err
+	}
+
 	fmt.Printf("Repository grid report generated:\n")
-	fmt.Printf("  CSV: %s\n", csvPath)
-	fmt.Printf("  MD:  %s\n", mdPath)
+	fmt.Printf("  CSV:  %s\n", csvPath)
+	fmt.Printf("  MD:   %s\n", mdPath)
+	fmt.Printf("  HTML: %s\n", htmlPath)
 	return nil
 }
 
