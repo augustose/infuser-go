@@ -12,19 +12,22 @@ import (
 	"github.com/augustose/infuser-go/internal/parser"
 )
 
-// GenerateRepoGrid creates CSV and Markdown reports of the repository access grid.
-func GenerateRepoGrid(configDir, serverURL string) error {
+// Row represents a single repository entry in the grid report.
+type Row struct {
+	Repository   string
+	URL          string
+	Description  string
+	Organization string
+	Owner        string
+	Users        []string
+}
+
+// buildRows parses the config directory and returns sorted report rows.
+func buildRows(configDir, serverURL string) ([]Row, error) {
 	state, err := parser.ParseAllConfig(configDir)
 	if err != nil {
-		return fmt.Errorf("parsing config: %w", err)
+		return nil, fmt.Errorf("parsing config: %w", err)
 	}
-
-	reportDir := filepath.Join("output", "reports", "grid")
-	if err := os.MkdirAll(reportDir, 0755); err != nil {
-		return err
-	}
-
-	timestamp := time.Now().Format("2006-01-02_150405")
 
 	// Find global admins
 	var globalAdmins []string
@@ -35,16 +38,7 @@ func GenerateRepoGrid(configDir, serverURL string) error {
 		}
 	}
 
-	type row struct {
-		Repository   string
-		URL          string
-		Description  string
-		Organization string
-		Owner        string
-		Users        []string
-	}
-
-	var rows []row
+	var rows []Row
 
 	// Organization repositories
 	for orgName, orgData := range state.Organizations {
@@ -83,7 +77,7 @@ func GenerateRepoGrid(configDir, serverURL string) error {
 
 			repoURL := buildRepoURL(serverURL, orgName, repoName)
 
-			rows = append(rows, row{
+			rows = append(rows, Row{
 				Repository:   repoName,
 				URL:          repoURL,
 				Description:  description,
@@ -116,7 +110,7 @@ func GenerateRepoGrid(configDir, serverURL string) error {
 
 			repoURL := buildRepoURL(serverURL, username, repoName)
 
-			rows = append(rows, row{
+			rows = append(rows, Row{
 				Repository:   repoName,
 				URL:          repoURL,
 				Description:  description,
@@ -134,6 +128,23 @@ func GenerateRepoGrid(configDir, serverURL string) error {
 		}
 		return rows[i].Repository < rows[j].Repository
 	})
+
+	return rows, nil
+}
+
+// GenerateRepoGrid creates CSV and Markdown reports of the repository access grid.
+func GenerateRepoGrid(configDir, serverURL string) error {
+	rows, err := buildRows(configDir, serverURL)
+	if err != nil {
+		return err
+	}
+
+	reportDir := filepath.Join("output", "reports", "grid")
+	if err := os.MkdirAll(reportDir, 0755); err != nil {
+		return err
+	}
+
+	timestamp := time.Now().Format("2006-01-02_150405")
 
 	// Write CSV
 	csvPath := filepath.Join(reportDir, fmt.Sprintf("repo_grid_%s.csv", timestamp))
