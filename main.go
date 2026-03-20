@@ -226,7 +226,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.returningCmd {
 			m.returningCmd = false
-			return m, nil
 		}
 
 		if m.err != nil {
