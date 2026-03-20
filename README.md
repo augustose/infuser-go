@@ -19,7 +19,7 @@ Infuser is a declarative reconciliation engine that manages users, organizations
 - **Multi-server support** — Manage multiple Gitea/Forgejo instances from a single tool
 - **Safe by default** — Dry-run mode shows what would change before touching anything
 - **Export** — Snapshot your current server state into YAML files
-- **Interactive TUI** — Arrow-key navigation, status indicators, guided setup
+- **Interactive TUI** — Arrow-key navigation, status indicators, guided setup, add servers from the menu
 - **Reports** — Generate CSV/Markdown grids of repositories, owners, and access
 
 ## Quick Start
@@ -38,6 +38,16 @@ go build -o infuser .
 ```
 
 ### Configure
+
+**Option A: Interactive wizard (recommended)**
+
+```bash
+./infuser
+# Select "+ Add new server" from the menu
+# The wizard will prompt for URL, token, and save everything for you
+```
+
+**Option B: Manual setup**
 
 Copy the example config and add your server(s):
 
@@ -96,9 +106,18 @@ servers:
     read_token: "direct-token-value"   # or set token directly (less secure)
     write_token: "direct-token-value"
     allow_writes: true
+
+  - name: local
+    url: http://localhost:3000
+    read_token: LOCAL_GITEA_TOKEN      # smart resolution: auto-detected as env var
+    write_token: LOCAL_GITEA_TOKEN
+    allow_writes: true
 ```
 
-Token resolution priority: direct value (`read_token`) > environment variable (`read_token_env`).
+Tokens can be provided three ways:
+- `read_token_env` / `write_token_env` — env var name (recommended, no secrets in file)
+- `read_token` / `write_token` — direct token value (hex string, used as-is)
+- `read_token: MY_ENV_VAR` — **smart resolution**: if the value is `UPPER_SNAKE_CASE`, Infuser checks the environment first. Real tokens (hex strings) are never mistaken for env var names.
 
 ### Single-server (`.env` fallback)
 

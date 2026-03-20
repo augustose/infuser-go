@@ -1,9 +1,17 @@
 # Multi-server configuration for Infuser
-# Token values are read from environment variables (never stored in this file)
+#
+# Tokens can be provided three ways:
+#   read_token / write_token         — direct token value (hex string, used as-is)
+#   read_token_env / write_token_env — env var name to read the token from (secure, no secrets in file)
+#   read_token: MY_ENV_VAR           — smart resolution: if the value looks like an UPPER_SNAKE_CASE
+#                                      env var name, Infuser checks the environment first. Real tokens
+#                                      (hex strings like a5fc2e9...) are never mistaken for env var names.
+#
+# If both direct and _env are set, the direct value takes precedence.
 
 servers:
-  # Production Gitea instance
-  - name: production
+  # Production Gitea instance (tokens via env vars — recommended)
+  - name: senetca
     url: https://gitea.example.com
     read_token_env: PROD_GITEA_READ_TOKEN
     write_token_env: PROD_GITEA_WRITE_TOKEN
@@ -11,11 +19,18 @@ servers:
     config_dir: infuser-config/production
     state_file: .infuser_state_production.json
 
-  # Staging Gitea instance
+  # Staging Gitea instance (direct tokens)
   - name: staging
     url: https://gitea-staging.example.com
-    read_token_env: STAGING_GITEA_READ_TOKEN
-    write_token_env: STAGING_GITEA_WRITE_TOKEN
+    read_token: "your_token_here"
+    write_token: "your_token_here"
     allow_writes: true
     config_dir: infuser-config/staging
     state_file: .infuser_state_staging.json
+
+  # Local dev instance (smart token resolution — env var name auto-detected)
+  - name: local
+    url: http://localhost:3000
+    read_token: LOCAL_GITEA_TOKEN
+    write_token: LOCAL_GITEA_TOKEN
+    allow_writes: true

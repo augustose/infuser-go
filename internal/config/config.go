@@ -4,11 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 )
+
+var envVarPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]+$`)
 
 type ServerConfig struct {
 	Name        string
@@ -27,6 +30,8 @@ type serversFile struct {
 type serverEntry struct {
 	Name          string `yaml:"name"`
 	URL           string `yaml:"url"`
+	ReadToken     string `yaml:"read_token"`
+	WriteToken    string `yaml:"write_token"`
 	ReadTokenEnv  string `yaml:"read_token_env"`
 	WriteTokenEnv string `yaml:"write_token_env"`
 	AllowWrites   bool   `yaml:"allow_writes"`
@@ -62,8 +67,8 @@ func loadFromYAML(data []byte) ([]ServerConfig, error) {
 		cfg := ServerConfig{
 			Name:        s.Name,
 			URL:         strings.TrimRight(s.URL, "/"),
-			ReadToken:   os.Getenv(s.ReadTokenEnv),
-			WriteToken:  os.Getenv(s.WriteTokenEnv),
+			ReadToken:   resolveToken(s.ReadToken, s.ReadTokenEnv),
+			WriteToken:  resolveToken(s.WriteToken, s.WriteTokenEnv),
 			AllowWrites: s.AllowWrites,
 			ConfigDir:   s.ConfigDir,
 			StateFile:   s.StateFile,
@@ -76,7 +81,7 @@ func loadFromYAML(data []byte) ([]ServerConfig, error) {
 			cfg.StateFile = fmt.Sprintf(".infuser_state_%s.json", s.Name)
 		}
 		if cfg.ReadToken == "" {
-			fmt.Printf("WARNING: %s read token env var %q is empty\n", s.Name, s.ReadTokenEnv)
+			fmt.Printf("WARNING: %s has no read token configured\n", s.Name)
 		}
 
 		configs = append(configs, cfg)
@@ -113,4 +118,81 @@ func loadFromEnv() ([]ServerConfig, error) {
 	}
 
 	return []ServerConfig{cfg}, nil
+}
+
+// resolveToken returns the direct token value if set, otherwise looks up the env var name.
+// If the direct value looks like an UPPER_SNAKE_CASE env var name, it tries to resolve it
+// from the environment first — real tokens (hex strings) never match this pattern.
+func resolveToken(direct, envName string) string {
+	if direct != "" {
+		if envVarPattern.MatchString(direct) {
+			if val := os.Getenv(direct); val != "" {
+				return val
+			}
+		}
+		return direct
+	}
+	if envName != "" {
+		return os.Getenv(envName)
+	}
+	return ""
+}
+
+// ServerEntry is exported for use by the add-server wizard.
+type ServerEntry = serverEntry
+
+// AppendServerToYAML reads servers.yaml, appends a new entry, and writes it back.
+func AppendServerToYAML(entry serverEntry) error {
+	var sf serversFile
+
+	if data, err := os.ReadFile("servers.yaml"); err == nil {
+		if err := yaml.Unmarshal(data, &sf); err != nil {
+			return fmt.Errorf("parsing servers.yaml: %w", err)
+		}
+	}
+
+	sf.Servers = append(sf.Servers, entry)
+
+	out, err := yaml.Marshal(&sf)
+	if err != nil {
+		return fmt.Errorf("marshaling servers.yaml: %w", err)
+	}
+
+	return os.WriteFile("servers.yaml", out, 0644)
+}
+
+// RemoveServerFromYAML removes a server by name from servers.yaml.
+func RemoveServerFromYAML(name string) error {
+	data, err := os.ReadFile("servers.yaml")
+	if err != nil {
+		return fmt.Errorf("reading servers.yaml: %w", err)
+	}
+
+	var sf serversFile
+	if err := yaml.Unmarshal(data, &sf); err != nil {
+		return fmt.Errorf("parsing servers.yaml: %w", err)
+	}
+
+	filtered := make([]serverEntry, 0, len(sf.Servers))
+	found := false
+	for _, s := range sf.Servers {
+		if s.Name == name {
+			found = true
+			continue
+		}
+		filtered = append(filtered, s)
+	}
+
+	if !found {
+		return fmt.Errorf("server %q not found in servers.yaml", name)
+	}
+
+	sf.Servers = filtered
+
+	out, err := yaml.Marshal(&sf)
+	if err != nil {
+		return fmt.Errorf("marshaling servers.yaml: %w", err)
+	}
+
+	return os.WriteFile("servers.yaml", out, 0644)
 }

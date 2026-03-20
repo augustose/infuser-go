@@ -1,18 +1,23 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/augustose/infuser-go/internal/config"
+	"github.com/augustose/infuser-go/internal/setup"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
 type cmdFinishedMsg struct{ err error }
+type addServerFinishedMsg struct{ err error }
+type removeServerFinishedMsg struct{ err error }
 type blinkMsg struct{}
 
 // -- banner --
@@ -153,24 +158,18 @@ func (m model) firstEnabledAction() int {
 func initialModel() model {
 	servers, err := config.LoadServers()
 	if err != nil {
-		return model{err: err}
+		// No servers configured — show server select with just "add server"
+		return model{
+			servers:     nil,
+			currentView: viewServerSelect,
+			serverIdx:   0, // points to the "add server" item
+		}
 	}
 
-	m := model{
+	return model{
 		servers:     servers,
 		currentView: viewServerSelect,
 	}
-
-	// Skip server selection if only one server
-	if len(servers) == 1 {
-		m.serverIdx = 0
-		m.currentView = viewActionSelect
-		m.hasState = stateFileExists(servers[0])
-		m.hasConfig = configDirExists(servers[0])
-		m.actionIdx = m.firstEnabledAction()
-	}
-
-	return m
 }
 
 func blinkTick() tea.Cmd {
@@ -196,8 +195,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case cmdFinishedMsg:
 		m.returningCmd = true
-		m.hasState = stateFileExists(m.servers[m.serverIdx])
-		m.hasConfig = configDirExists(m.servers[m.serverIdx])
+		if m.serverIdx < len(m.servers) {
+			m.hasState = stateFileExists(m.servers[m.serverIdx])
+			m.hasConfig = configDirExists(m.servers[m.serverIdx])
+		}
+		return m, nil
+
+	case addServerFinishedMsg:
+		m.returningCmd = true
+		if servers, err := config.LoadServers(); err == nil {
+			m.servers = servers
+		}
+		m.currentView = viewServerSelect
+		if m.serverIdx > len(m.servers) {
+			m.serverIdx = len(m.servers)
+		}
+		return m, nil
+
+	case removeServerFinishedMsg:
+		m.returningCmd = true
+		if servers, err := config.LoadServers(); err == nil {
+			m.servers = servers
+		}
+		m.currentView = viewServerSelect
+		if m.serverIdx >= len(m.servers) {
+			m.serverIdx = max(len(m.servers)-1, 0)
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -234,7 +257,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "down", "j":
 			switch m.currentView {
 			case viewServerSelect:
-				if m.serverIdx < len(m.servers)-1 {
+				// len(m.servers) is the "add server" item
+				if m.serverIdx < len(m.servers) {
 					m.serverIdx++
 				}
 			case viewActionSelect:
@@ -249,6 +273,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			switch m.currentView {
 			case viewServerSelect:
+				if m.serverIdx == len(m.servers) {
+					// "Add new server" selected
+					return m, execAddServer()
+				}
 				m.currentView = viewActionSelect
 				m.actionIdx = m.firstEnabledAction()
 				m.hasState = stateFileExists(m.servers[m.serverIdx])
@@ -261,15 +289,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.runAction()
 			}
 
+		case "d", "delete", "backspace":
+			if m.currentView == viewServerSelect && m.serverIdx < len(m.servers) {
+				return m, execRemoveServer(m.servers[m.serverIdx])
+			}
+
 		case "esc":
 			switch m.currentView {
 			case viewActionSelect:
-				if len(m.servers) > 1 {
-					m.currentView = viewServerSelect
-					return m, nil
-				}
-				m.quitting = true
-				return m, tea.Quit
+				m.currentView = viewServerSelect
+				return m, nil
 			case viewServerSelect:
 				m.quitting = true
 				return m, tea.Quit
@@ -343,7 +372,116 @@ func (m model) serverSelectView() string {
 		}
 	}
 
+	// Separator and "Add new server" option
+	b.WriteString(descStyle.Render("    ── ── ── ──") + "\n")
+	addIdx := len(m.servers)
+	if m.serverIdx == addIdx {
+		b.WriteString(selectedItemStyle.Render("▸ + Add new server") + "\n")
+	} else {
+		b.WriteString(itemStyle.Render("  + Add new server") + "\n")
+	}
+
 	return b.String()
+}
+
+// addServerExec implements tea.ExecCommand to run the add-server wizard in-process.
+type addServerExec struct {
+	stdin  io.Reader
+	stdout io.Writer
+	stderr io.Writer
+}
+
+func (a *addServerExec) Run() error {
+	_, err := setup.RunAddServer()
+	if err != nil {
+		fmt.Fprintf(a.stderr, "Error: %v\n", err)
+	}
+	fmt.Fprintln(a.stdout)
+	fmt.Fprint(a.stdout, "Press Enter to return to menu...")
+	reader := bufio.NewReader(a.stdin)
+	_, _ = reader.ReadString('\n')
+	return err
+}
+
+func (a *addServerExec) SetStdin(r io.Reader)  { a.stdin = r }
+func (a *addServerExec) SetStdout(w io.Writer) { a.stdout = w }
+func (a *addServerExec) SetStderr(w io.Writer) { a.stderr = w }
+
+func execAddServer() tea.Cmd {
+	return tea.Exec(&addServerExec{}, func(err error) tea.Msg {
+		return addServerFinishedMsg{err: err}
+	})
+}
+
+// removeServerExec implements tea.ExecCommand to confirm and remove a server.
+type removeServerExec struct {
+	name      string
+	configDir string
+	stateFile string
+	stdin     io.Reader
+	stdout    io.Writer
+	stderr    io.Writer
+}
+
+func (r *removeServerExec) Run() error {
+	fmt.Fprintf(r.stdout, "\n=== Remove Server ===\n\n")
+	fmt.Fprintf(r.stdout, "  Server:     %s\n", r.name)
+	fmt.Fprintf(r.stdout, "  Config dir: %s\n", r.configDir)
+	fmt.Fprintf(r.stdout, "  State file: %s\n\n", r.stateFile)
+	fmt.Fprintf(r.stdout, "  This will remove the server entry, config directory, and state file.\n\n")
+	fmt.Fprint(r.stdout, "  Are you sure? [y/N]: ")
+
+	reader := bufio.NewReader(r.stdin)
+	input, _ := reader.ReadString('\n')
+	input = strings.TrimSpace(strings.ToLower(input))
+
+	if input != "y" && input != "yes" {
+		fmt.Fprintln(r.stdout, "\n  Cancelled.")
+		fmt.Fprintln(r.stdout)
+		fmt.Fprint(r.stdout, "Press Enter to return to menu...")
+		_, _ = reader.ReadString('\n')
+		return nil
+	}
+
+	if err := config.RemoveServerFromYAML(r.name); err != nil {
+		fmt.Fprintf(r.stderr, "\n  Error: %v\n", err)
+		fmt.Fprintln(r.stdout)
+		fmt.Fprint(r.stdout, "Press Enter to return to menu...")
+		_, _ = reader.ReadString('\n')
+		return err
+	}
+	fmt.Fprintf(r.stdout, "\n  Removed \"%s\" from servers.yaml\n", r.name)
+
+	if err := os.RemoveAll(r.configDir); err != nil {
+		fmt.Fprintf(r.stdout, "  Warning: could not delete config dir: %v\n", err)
+	} else {
+		fmt.Fprintf(r.stdout, "  Deleted config dir: %s\n", r.configDir)
+	}
+
+	if err := os.Remove(r.stateFile); err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(r.stdout, "  Warning: could not delete state file: %v\n", err)
+	} else if err == nil {
+		fmt.Fprintf(r.stdout, "  Deleted state file: %s\n", r.stateFile)
+	}
+
+	fmt.Fprintln(r.stdout)
+	fmt.Fprint(r.stdout, "Press Enter to return to menu...")
+	_, _ = reader.ReadString('\n')
+	return nil
+}
+
+func (r *removeServerExec) SetStdin(rd io.Reader) { r.stdin = rd }
+func (r *removeServerExec) SetStdout(w io.Writer) { r.stdout = w }
+func (r *removeServerExec) SetStderr(w io.Writer) { r.stderr = w }
+
+func execRemoveServer(srv config.ServerConfig) tea.Cmd {
+	return tea.Exec(&removeServerExec{
+		name:      srv.Name,
+		configDir: srv.ConfigDir,
+		stateFile: srv.StateFile,
+	}, func(err error) tea.Msg {
+		return removeServerFinishedMsg{err: err}
+	})
 }
 
 func (m model) actionSelectView() string {
@@ -429,10 +567,14 @@ func (m model) renderStatusBar() string {
 	}
 
 	escLabel := "esc quit"
-	if m.currentView == viewActionSelect && len(m.servers) > 1 {
+	extra := ""
+	if m.currentView == viewActionSelect {
 		escLabel = "esc back"
 	}
-	right := fmt.Sprintf("↑/↓ navigate • enter select • %s ", escLabel)
+	if m.currentView == viewServerSelect && m.serverIdx < len(m.servers) {
+		extra = "d remove • "
+	}
+	right := fmt.Sprintf("↑/↓ navigate • enter select • %s%s ", extra, escLabel)
 
 	leftPlain := stripAnsi(left)
 	rightPlain := right

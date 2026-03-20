@@ -10,6 +10,7 @@ import (
 	"github.com/augustose/infuser-go/internal/api"
 	"github.com/augustose/infuser-go/internal/memory"
 	"github.com/augustose/infuser-go/internal/parser"
+	"github.com/augustose/infuser-go/internal/setup"
 )
 
 type Options struct {
@@ -49,17 +50,7 @@ func RunEngine(client *api.GiteaClient, opts Options, configDir, stateFile strin
 	}
 
 	if len(mem.State.Users) == 0 && len(mem.State.Organizations) == 0 {
-		fmt.Println("  Local memory is empty.")
-		if !opts.DryRun {
-			fmt.Println("  Initializing state file from current YAML files...")
-			if err := mem.Save(desired); err != nil {
-				return err
-			}
-			fmt.Println("  State file initialized. Future runs will compute diffs against this baseline.")
-		} else {
-			fmt.Println("  Run with --apply to initialize the state file before reconciling.")
-		}
-		return nil
+		return setup.RunWizard(client, configDir, stateFile, opts.AutoApprove)
 	}
 
 	fmt.Println("\n[3/3] Computing Diff Plan...")

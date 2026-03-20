@@ -40,6 +40,43 @@ func (c *GiteaClient) BaseURL() string {
 	return c.baseURL
 }
 
+// Ping tests the API connection and token validity.
+// It returns the Gitea version, whether the read token works, whether the write token works, and any error.
+func (c *GiteaClient) Ping() (version string, readOK bool, writeOK bool, err error) {
+	// Test read token via /api/v1/version
+	resp, err := c.doRequest("GET", "/api/v1/version", nil, false)
+	if err != nil {
+		return "", false, false, fmt.Errorf("connecting to %s: %w", c.baseURL, err)
+	}
+	body, err := c.readBody(resp)
+	if err != nil {
+		return "", false, false, fmt.Errorf("reading response from %s: %w", c.baseURL, err)
+	}
+
+	if resp.StatusCode == 200 {
+		readOK = true
+		var data map[string]any
+		if err := json.Unmarshal(body, &data); err == nil {
+			if v, ok := data["version"].(string); ok {
+				version = v
+			}
+		}
+	}
+
+	// Test write token via /api/v1/user (only if configured)
+	if c.writeToken != "" {
+		resp, err := c.doRequest("GET", "/api/v1/user", nil, true)
+		if err == nil {
+			_, _ = c.readBody(resp)
+			if resp.StatusCode == 200 {
+				writeOK = true
+			}
+		}
+	}
+
+	return version, readOK, writeOK, nil
+}
+
 func (c *GiteaClient) checkWrite() error {
 	if !c.allowWrites {
 		return fmt.Errorf("write blocked: GITEA_ALLOW_WRITES is not enabled")
