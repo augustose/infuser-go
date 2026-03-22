@@ -606,6 +606,58 @@ func (c *GiteaClient) UpdateRepo(owner, repoName string, changed map[string]any)
 	return fmt.Errorf("updating repo %s/%s: HTTP %d: %s", owner, repoName, resp.StatusCode, string(body))
 }
 
+// --- Admin user listing & deactivation ---
+
+func (c *GiteaClient) ListUsers() ([]map[string]any, error) {
+	return c.GetPaginated("/api/v1/admin/users")
+}
+
+func (c *GiteaClient) DeactivateUser(username string) error {
+	if err := c.checkWrite(); err != nil {
+		return err
+	}
+
+	payload := map[string]any{
+		"login_name":     username,
+		"source_id":      0,
+		"prohibit_login": true,
+	}
+
+	resp, err := c.doRequest("PATCH", "/api/v1/admin/users/"+username, payload, true)
+	if err != nil {
+		return err
+	}
+	body, _ := c.readBody(resp)
+
+	if resp.StatusCode == 200 {
+		return nil
+	}
+	return fmt.Errorf("deactivating user %s: HTTP %d: %s", username, resp.StatusCode, string(body))
+}
+
+func (c *GiteaClient) ActivateUser(username string) error {
+	if err := c.checkWrite(); err != nil {
+		return err
+	}
+
+	payload := map[string]any{
+		"login_name":     username,
+		"source_id":      0,
+		"prohibit_login": false,
+	}
+
+	resp, err := c.doRequest("PATCH", "/api/v1/admin/users/"+username, payload, true)
+	if err != nil {
+		return err
+	}
+	body, _ := c.readBody(resp)
+
+	if resp.StatusCode == 200 {
+		return nil
+	}
+	return fmt.Errorf("activating user %s: HTTP %d: %s", username, resp.StatusCode, string(body))
+}
+
 // --- Helpers ---
 
 func mapGetString(m map[string]any, key, fallback string) string {
