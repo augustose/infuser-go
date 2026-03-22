@@ -168,6 +168,16 @@ func (c *GiteaClient) GetPaginated(path string) ([]map[string]any, error) {
 	return results, nil
 }
 
+// isAlreadyExists checks if an API error indicates the resource already exists.
+func isAlreadyExists(statusCode int, body []byte) bool {
+	if statusCode != 409 && statusCode != 422 {
+		return false
+	}
+	msg := strings.ToLower(string(body))
+	return strings.Contains(msg, "already exists") ||
+		strings.Contains(msg, "already exist")
+}
+
 // --- User operations ---
 
 func (c *GiteaClient) CreateUser(username string, spec map[string]any) error {
@@ -193,6 +203,10 @@ func (c *GiteaClient) CreateUser(username string, spec map[string]any) error {
 
 	if resp.StatusCode == 201 {
 		fmt.Printf("  [API] User %s created successfully.\n", username)
+		return nil
+	}
+	if isAlreadyExists(resp.StatusCode, body) {
+		fmt.Printf("  [OK] User %s already exists on server — skipped creation, syncing to local state.\n", username)
 		return nil
 	}
 	return fmt.Errorf("creating user %s: HTTP %d: %s", username, resp.StatusCode, string(body))
@@ -264,6 +278,10 @@ func (c *GiteaClient) CreateOrganization(name string, spec map[string]any) error
 		fmt.Printf("  [API] Organization %s created.\n", name)
 		return nil
 	}
+	if isAlreadyExists(resp.StatusCode, body) {
+		fmt.Printf("  [OK] Organization %s already exists on server — skipped creation, syncing to local state.\n", name)
+		return nil
+	}
 	return fmt.Errorf("creating org %s: HTTP %d: %s", name, resp.StatusCode, string(body))
 }
 
@@ -326,6 +344,10 @@ func (c *GiteaClient) CreateTeam(orgName, teamName string, spec map[string]any) 
 				return int64(id), nil
 			}
 		}
+		return 0, nil
+	}
+	if isAlreadyExists(resp.StatusCode, body) {
+		fmt.Printf("  [OK] Team %s (%s) already exists on server — skipped creation, syncing to local state.\n", teamName, orgName)
 		return 0, nil
 	}
 	return 0, fmt.Errorf("creating team %s: HTTP %d: %s", teamName, resp.StatusCode, string(body))
@@ -484,6 +506,10 @@ func (c *GiteaClient) CreateOrgRepo(orgName, repoName string, spec map[string]an
 		fmt.Printf("  [API] Repository %s/%s created.\n", orgName, repoName)
 		return nil
 	}
+	if isAlreadyExists(resp.StatusCode, body) {
+		fmt.Printf("  [OK] Repository %s/%s already exists on server — skipped creation, syncing to local state.\n", orgName, repoName)
+		return nil
+	}
 	return fmt.Errorf("creating repo %s/%s: HTTP %d: %s", orgName, repoName, resp.StatusCode, string(body))
 }
 
@@ -525,6 +551,10 @@ func (c *GiteaClient) CreateUserRepo(username, repoName string, spec map[string]
 
 	if resp.StatusCode == 201 {
 		fmt.Printf("  [API] Repository %s/%s created.\n", username, repoName)
+		return nil
+	}
+	if isAlreadyExists(resp.StatusCode, body) {
+		fmt.Printf("  [OK] Repository %s/%s already exists on server — skipped creation, syncing to local state.\n", username, repoName)
 		return nil
 	}
 	return fmt.Errorf("creating repo %s/%s: HTTP %d: %s", username, repoName, resp.StatusCode, string(body))
